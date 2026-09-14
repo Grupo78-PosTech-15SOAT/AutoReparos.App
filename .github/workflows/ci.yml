@@ -1,10 +1,22 @@
 name: CI - AutoReparos.App
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
-    branches: [main, develop, 'feat/**']
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - '.dockerignore'
   pull_request:
-    branches: [main, develop]
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - '.dockerignore'
 
 env:
   DOTNET_VERSION: '10.0.x'
@@ -12,7 +24,7 @@ env:
 
 jobs:
   backend-build-test:
-    name: 🔨 Backend Build & Test
+    name: Compilação e Testes (Backend .NET 10)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -30,54 +42,54 @@ jobs:
           --health-retries 5
 
     steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: 🛠️ Setup .NET
-        uses: actions/setup-dotnet@v4
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: 📦 Restore dependencies
+      - name: Restore Dependencies
         run: dotnet restore AutoReparos.App.slnx
 
-      - name: 🔨 Build
+      - name: Build Application
         run: dotnet build AutoReparos.App.slnx --no-restore -c Release
 
-      - name: 🧪 Run Unit Tests (Domain)
+      - name: Run Unit Tests (Domain)
         run: dotnet test AutoReparos.Domain.Tests/AutoReparos.Domain.Tests.csproj --no-build -c Release --logger "trx;LogFileName=domain-results.trx"
 
-      - name: 🧪 Run Unit Tests (Application)
+      - name: Run Unit Tests (Application)
         run: dotnet test AutoReparos.Application.Tests/AutoReparos.Application.Tests.csproj --no-build -c Release --logger "trx;LogFileName=application-results.trx"
 
-      - name: 🧪 Run Integration Tests
+      - name: Run Integration Tests
         run: dotnet test AutoReparos.IntegrationTests/AutoReparos.IntegrationTests.csproj --no-build -c Release --logger "trx;LogFileName=integration-results.trx"
         env:
           ConnectionStrings__DefaultConnection: "Host=localhost;Port=5432;Database=autoreparos_test;Username=testuser;Password=testpassword"
 
   frontend-build:
-    name: 🌐 Frontend Build
+    name: Compilação e Testes (Frontend Angular 19)
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: 🛠️ Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'yarn'
           cache-dependency-path: AutoReparos.Web/yarn.lock
 
-      - name: 📦 Install dependencies
+      - name: Install Dependencies
         working-directory: AutoReparos.Web
         run: yarn install --frozen-lockfile
 
-      - name: 🔨 Build Angular
+      - name: Build Angular Application
         working-directory: AutoReparos.Web
         run: yarn build
 
-      - name: 🧪 Run Frontend Tests
+      - name: Run Frontend Tests
         working-directory: AutoReparos.Web
         run: yarn test --watch=false
