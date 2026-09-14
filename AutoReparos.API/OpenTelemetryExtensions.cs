@@ -1,3 +1,5 @@
+using AutoReparos.Application.Shared.Metrics;
+using OpenTelemetry.Exporter;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -18,6 +20,20 @@ namespace AutoReparos.API
             var resourceBuilder = ResourceBuilder.CreateDefault()
                 .AddService(serviceName: serviceName, serviceVersion: "1.0.0");
 
+            // Quando uma license key é fornecida, os sinais podem ser enviados direto ao backend
+            // do vendor (ex: https://otlp.nr-data.net:4317) sem passar pelo OTel Collector local.
+            var vendorLicenseKey = configuration["NEW_RELIC_LICENSE_KEY"]
+                ?? configuration["OpenTelemetry:NewRelicLicenseKey"];
+
+            Action<OtlpExporterOptions> configureOtlp = options =>
+            {
+                options.Endpoint = new Uri(otelEndpoint);
+                if (!string.IsNullOrWhiteSpace(vendorLicenseKey))
+                {
+                    options.Headers = $"api-key={vendorLicenseKey}";
+                }
+            };
+
             services.AddOpenTelemetry()
                 .WithTracing(tracing =>
                 {
@@ -34,31 +50,23 @@ namespace AutoReparos.API
                         {
                             options.SetDbStatementForText = true;
                         })
-                        .AddOtlpExporter(options =>
-                        {
-                            options.Endpoint = new Uri(otelEndpoint);
-                        });
+                        .AddOtlpExporter(configureOtlp);
                 })
                 .WithMetrics(metrics =>
                 {
                     metrics
                         .SetResourceBuilder(resourceBuilder)
+                        .AddMeter(AutoReparosMetrics.MeterName)
                         .AddAspNetCoreInstrumentation()
                         .AddHttpClientInstrumentation()
                         .AddRuntimeInstrumentation()
                         .AddProcessInstrumentation()
-                        .AddOtlpExporter(options =>
-                        {
-                            options.Endpoint = new Uri(otelEndpoint);
-                        });
+                        .AddOtlpExporter(configureOtlp);
                 })
                 .WithLogging(logs =>
                 {
                     logs.SetResourceBuilder(resourceBuilder);
-                    logs.AddOtlpExporter(options =>
-                    {
-                        options.Endpoint = new Uri(otelEndpoint);
-                    });
+                    logs.AddOtlpExporter(configureOtlp);
                 }, options =>
                 {
                     options.IncludeFormattedMessage = true;
@@ -72,10 +80,7 @@ namespace AutoReparos.API
                 options.IncludeFormattedMessage = true;
                 options.IncludeScopes = true;
                 options.ParseStateValues = true;
-                options.AddOtlpExporter(otlpOptions =>
-                {
-                    otlpOptions.Endpoint = new Uri(otelEndpoint);
-                });
+                options.AddOtlpExporter(configureOtlp);
             });
 
             return services;
