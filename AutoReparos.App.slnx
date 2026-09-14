@@ -1,0 +1,9 @@
+<Solution>
+  <Project Path="AutoReparos.API/AutoReparos.API.csproj" />
+  <Project Path="AutoReparos.Application/AutoReparos.Application.csproj" />
+  <Project Path="AutoReparos.Application.Tests/AutoReparos.Application.Tests.csproj" />
+  <Project Path="AutoReparos.Domain/AutoReparos.Domain.csproj" />
+  <Project Path="AutoReparos.Domain.Tests/AutoReparos.Domain.Tests.csproj" />
+  <Project Path="AutoReparos.Infra/AutoReparos.Infra.csproj" />
+  <Project Path="AutoReparos.IntegrationTests/AutoReparos.IntegrationTests.csproj" />
+</Solution>

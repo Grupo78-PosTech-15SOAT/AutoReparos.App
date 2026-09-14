@@ -1,0 +1,83 @@
+name: CI - AutoReparos.App
+
+on:
+  push:
+    branches: [main, develop, 'feat/**']
+  pull_request:
+    branches: [main, develop]
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  NODE_VERSION: '22'
+
+jobs:
+  backend-build-test:
+    name: 🔨 Backend Build & Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: autoreparos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: 📦 Restore dependencies
+        run: dotnet restore AutoReparos.App.slnx
+
+      - name: 🔨 Build
+        run: dotnet build AutoReparos.App.slnx --no-restore -c Release
+
+      - name: 🧪 Run Unit Tests (Domain)
+        run: dotnet test AutoReparos.Domain.Tests/AutoReparos.Domain.Tests.csproj --no-build -c Release --logger "trx;LogFileName=domain-results.trx"
+
+      - name: 🧪 Run Unit Tests (Application)
+        run: dotnet test AutoReparos.Application.Tests/AutoReparos.Application.Tests.csproj --no-build -c Release --logger "trx;LogFileName=application-results.trx"
+
+      - name: 🧪 Run Integration Tests
+        run: dotnet test AutoReparos.IntegrationTests/AutoReparos.IntegrationTests.csproj --no-build -c Release --logger "trx;LogFileName=integration-results.trx"
+        env:
+          ConnectionStrings__DefaultConnection: "Host=localhost;Port=5432;Database=autoreparos_test;Username=testuser;Password=testpassword"
+
+  frontend-build:
+    name: 🌐 Frontend Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'yarn'
+          cache-dependency-path: AutoReparos.Web/yarn.lock
+
+      - name: 📦 Install dependencies
+        working-directory: AutoReparos.Web
+        run: yarn install --frozen-lockfile
+
+      - name: 🔨 Build Angular
+        working-directory: AutoReparos.Web
+        run: yarn build
+
+      - name: 🧪 Run Frontend Tests
+        working-directory: AutoReparos.Web
+        run: yarn test --watch=false
