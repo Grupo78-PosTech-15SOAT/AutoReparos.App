@@ -1,0 +1,165 @@
+# Docker Compose - AutoReparos.App (API, Web, PostgreSQL & OpenTelemetry Stack)
+services:
+  postgres:
+    image: postgres:16
+    container_name: autoreparos-app-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-autoreparos}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-Admin@123}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d autoreparos"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - autoreparos-network
+
+  api:
+    image: autoreparos-api
+    build:
+      context: .
+      dockerfile: AutoReparos.API/Dockerfile
+    container_name: autoreparos-app-api
+    restart: always
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Development}
+      - ConnectionStrings__DbConnection=Host=postgres;Database=${POSTGRES_DB:-autoreparos};Username=${POSTGRES_USER:-admin};Password=${DB_PASSWORD:-Admin@123}
+      - Jwt__Secret=${JWT_SECRET:-FBQOvEaUYAlmdilnGOk7vKzO9xUHiLgb8QCFUrk6af9}
+      - Jwt__ExpiryHours=${JWT_EXPIRY_HOURS:-2}
+      - SeedUser__Email=${SEED_USER_EMAIL:-admin@autoreparos.com}
+      - SeedUser__Password=${SEED_USER_PASSWORD:-Admin@123}
+      - AprovacaoToken__Secret=${APROVACAO_TOKEN_SECRET:-another_super_secret_key_for_approval_tokens_with_enough_length}
+      - SendGrid__ApiKey=${SENDGRID_API_KEY:-SG.dummy_key}
+      - SendGrid__FromEmail=${SENDGRID_FROM_EMAIL:-noreply@autoreparos.com}
+      - SendGrid__FromName=${SENDGRID_FROM_NAME:-AutoReparos}
+      - OpenTelemetry__Endpoint=http://otel-collector:4317
+      - OpenTelemetry__ServiceName=autoreparos-api
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    networks:
+      - autoreparos-network
+
+  web:
+    image: autoreparos-web
+    build:
+      context: ./AutoReparos.Web
+      dockerfile: Dockerfile
+    container_name: autoreparos-app-web
+    restart: always
+    environment:
+      - API_URL=http://localhost:8080
+    ports:
+      - "4200:8080"
+    depends_on:
+      - api
+    networks:
+      - autoreparos-network
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: autoreparos-app-pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@autoreparos.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-Admin@123}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./docker/servers.json:/pgadmin4/servers.json
+    networks:
+      - autoreparos-network
+
+  # Stack de Observabilidade OpenTelemetry
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    container_name: autoreparos-app-otel-collector
+    restart: always
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./docker/observability/otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+      - "8889:8889" # Prometheus metrics exporter
+    depends_on:
+      - prometheus
+      - jaeger
+      - loki
+    networks:
+      - autoreparos-network
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: autoreparos-app-prometheus
+    restart: always
+    volumes:
+      - ./docker/observability/otel/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - autoreparos-network
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    container_name: autoreparos-app-jaeger
+    restart: always
+    ports:
+      - "16686:16686" # UI
+    networks:
+      - autoreparos-network
+
+  loki:
+    image: grafana/loki:2.9.5
+    container_name: autoreparos-app-loki
+    restart: always
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./docker/observability/otel/loki-config.yaml:/etc/loki/local-config.yaml
+    ports:
+      - "3100:3100"
+    networks:
+      - autoreparos-network
+
+  grafana:
+    image: grafana/grafana:10.4.1
+    container_name: autoreparos-app-grafana
+    restart: always
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./docker/observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./docker/observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - jaeger
+      - loki
+    networks:
+      - autoreparos-network
+
+volumes:
+  pg_data:
+  pgadmin_data:
+
+networks:
+  autoreparos-network:
+    driver: bridge
