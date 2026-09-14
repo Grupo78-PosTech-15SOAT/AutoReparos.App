@@ -1,4 +1,4 @@
-using AutoReparos.Application.Auth.Services.Interfaces;
+﻿using AutoReparos.Application.Auth.Services.Interfaces;
 using AutoReparos.Application.Dashboard.Services;
 using AutoReparos.Application.OrdensServicos.Services.Interfaces;
 using AutoReparos.Application.Shared.Interfaces;
@@ -9,6 +9,7 @@ using AutoReparos.Domain.Servicos.Repositories;
 using AutoReparos.Domain.Usuarios.Repositories;
 using AutoReparos.Domain.Veiculos.Repositories;
 using AutoReparos.Infra.Data;
+using AutoReparos.Infra.Data.Interceptors;
 using AutoReparos.Infra.Identity;
 using AutoReparos.Infra.Identity.Models;
 using AutoReparos.Infra.Identity.Services;
@@ -35,6 +36,7 @@ namespace AutoReparos.Infra.IoC
                 var config = serviceProvider.GetRequiredService<IConfiguration>();
                 options.UseNpgsql(config.GetConnectionString("DbConnection"),
                     b => b.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName));
+                options.AddInterceptors(new OrdemServicoMetricsInterceptor());
             });
 
             services.AddIdentityCore<UsuarioIdentity>()
