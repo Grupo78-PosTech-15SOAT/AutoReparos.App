@@ -1,10 +1,29 @@
-using AutoReparos.API;
+﻿using AutoReparos.API;
 using AutoReparos.API.Endpoints;
 using AutoReparos.Application;
 using AutoReparos.Infra.Data;
 using AutoReparos.Infra.IoC;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Logs estruturados em JSON com correlacao de TraceId/SpanId.
+// Precisa vir ANTES de AddOpenTelemetryObservability, que registra o provider OTel
+// em builder.Logging - um ClearProviders() posterior descartaria o exportador OTLP.
+builder.Logging.ClearProviders();
+builder.Logging.Configure(options =>
+{
+    options.ActivityTrackingOptions = ActivityTrackingOptions.TraceId
+        | ActivityTrackingOptions.SpanId
+        | ActivityTrackingOptions.ParentId;
+});
+builder.Logging.AddJsonConsole(options =>
+{
+    options.IncludeScopes = true;
+    options.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ ";
+    options.UseUtcTimestamp = true;
+    options.JsonWriterOptions = new JsonWriterOptions { Indented = false };
+});
 
 builder.Services.AddAPI(builder.Configuration);
 
