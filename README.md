@@ -20,7 +20,7 @@ O **AutoReparos.App** é o repositório central contendo toda a lógica de negó
 | `AutoReparos.API` | Endpoints Minimal APIs, Swagger, injeção de dependência e OpenTelemetry |
 | `AutoReparos.Web` | Frontend moderno em Angular 19 com Standalone Components e Angular Signals |
 | `AutoReparos.Domain.Tests` | 113 testes unitários de regras de domínio (xUnit + FluentAssertions) |
-| `AutoReparos.Application.Tests` | 123 testes unitários de casos de uso (xUnit + NSubstitute) |
+| `AutoReparos.Application.Tests` | 134 testes unitários de casos de uso e métricas (xUnit + NSubstitute + FluentAssertions) |
 | `AutoReparos.IntegrationTests` | 67 testes de integração ponta a ponta com **Testcontainers PostgreSQL** |
 
 ---
