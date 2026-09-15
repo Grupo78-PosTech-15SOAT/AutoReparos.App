@@ -1,6 +1,7 @@
 using AutoReparos.Application.OrdensServicos.Services.Interfaces;
 using AutoReparos.Application.Servicos.DTOs.Response;
 using AutoReparos.Application.Shared.Interfaces;
+using AutoReparos.Application.Shared.Metrics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using SendGrid;
@@ -86,8 +87,31 @@ namespace AutoReparos.Infra.Services
 </div>";
 
             var msg = MailHelper.CreateSingleEmail(from, to, subject, plainTextContent, htmlContent);
-            var response = await client.SendEmailAsync(msg);
-            _logger.LogInformation("Email de orçamento enviado. StatusCode: {StatusCode}", response.StatusCode);
+
+            try
+            {
+                var response = await client.SendEmailAsync(msg);
+                if (!response.IsSuccessStatusCode)
+                {
+                    _logger.LogWarning("Falha ao enviar e-mail de orçamento via SendGrid. StatusCode: {StatusCode}", response.StatusCode);
+                    AutoReparosMetrics.NotificacoesFalhas.Add(1,
+                        new KeyValuePair<string, object?>("canal", "email"),
+                        new KeyValuePair<string, object?>("tipo", "orcamento"),
+                        new KeyValuePair<string, object?>("status_code", (int)response.StatusCode));
+                }
+                else
+                {
+                    _logger.LogInformation("Email de orçamento enviado. StatusCode: {StatusCode}", response.StatusCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Erro de integração externa ao disparar e-mail de orçamento para {Email}", emailDestinatario);
+                AutoReparosMetrics.NotificacoesFalhas.Add(1,
+                    new KeyValuePair<string, object?>("canal", "email"),
+                    new KeyValuePair<string, object?>("tipo", "orcamento"),
+                    new KeyValuePair<string, object?>("motivo", ex.GetType().Name));
+            }
         }
 
         public async Task EnviarAtualizacaoStatus(string emailDestinatario, string nomeDestinatario, Guid ordemServicoId, string statusAnterior, string novoStatus)
@@ -150,8 +174,31 @@ namespace AutoReparos.Infra.Services
 </div>";
 
             var msg = MailHelper.CreateSingleEmail(from, to, subject, plainTextContent, htmlContent);
-            var response = await client.SendEmailAsync(msg);
-            _logger.LogInformation("Email de atualização de status enviado. StatusCode: {StatusCode}", response.StatusCode);
+
+            try
+            {
+                var response = await client.SendEmailAsync(msg);
+                if (!response.IsSuccessStatusCode)
+                {
+                    _logger.LogWarning("Falha ao enviar e-mail de atualização de status via SendGrid. StatusCode: {StatusCode}", response.StatusCode);
+                    AutoReparosMetrics.NotificacoesFalhas.Add(1,
+                        new KeyValuePair<string, object?>("canal", "email"),
+                        new KeyValuePair<string, object?>("tipo", "atualizacao_status"),
+                        new KeyValuePair<string, object?>("status_code", (int)response.StatusCode));
+                }
+                else
+                {
+                    _logger.LogInformation("Email de atualização de status enviado. StatusCode: {StatusCode}", response.StatusCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Erro de integração externa ao disparar e-mail de atualização de status para {Email}", emailDestinatario);
+                AutoReparosMetrics.NotificacoesFalhas.Add(1,
+                    new KeyValuePair<string, object?>("canal", "email"),
+                    new KeyValuePair<string, object?>("tipo", "atualizacao_status"),
+                    new KeyValuePair<string, object?>("motivo", ex.GetType().Name));
+            }
         }
 
         private static string TraduzirStatus(string status)
