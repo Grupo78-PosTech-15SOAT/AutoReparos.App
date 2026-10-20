@@ -1,5 +1,6 @@
 using AutoReparos.API;
 using AutoReparos.API.Endpoints;
+using AutoReparos.API.Middlewares;
 using AutoReparos.Application;
 using AutoReparos.Infra.Data;
 using AutoReparos.Infra.IoC;
@@ -42,6 +43,8 @@ await DbInitializer.SeedDataAsync(app.Services);
 app.UseSwagger();
 app.UseSwaggerUI(options =>
     options.SwaggerEndpoint("/swagger/v1/swagger.json", "AutoReparos API v1"));
+
+app.UseMiddleware<CorrelationIdMiddleware>();
 
 app.UseExceptionHandler();
 

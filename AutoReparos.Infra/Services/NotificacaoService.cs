@@ -6,7 +6,15 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using SendGrid;
 using SendGrid.Helpers.Mail;
+using System;
+using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Net.Sockets;
+using System.Threading.Tasks;
 
 namespace AutoReparos.Infra.Services
 {
@@ -29,8 +37,19 @@ namespace AutoReparos.Infra.Services
             var aprovarUrl = $"{baseUrl}/api/ordem-servico/aprovar?token={Uri.EscapeDataString(token)}";
             var recusarUrl = $"{baseUrl}/api/ordem-servico/recusar?token={Uri.EscapeDataString(token)}";
 
-            var client = new SendGridClient(_configuration["SendGrid:ApiKey"]);
-            var from = new EmailAddress(_configuration["SendGrid:FromEmail"], _configuration["SendGrid:FromName"]);
+            var apiKey = _configuration["SendGrid:ApiKey"];
+            var fromEmail = _configuration["SendGrid:FromEmail"];
+            var fromName = _configuration["SendGrid:FromName"];
+
+            if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(fromEmail))
+            {
+                _logger.LogWarning("Configurações do SendGrid incompletas ou ausentes. Envio de e-mail de orçamento ignorado.");
+                RegistrarFalhaMetrica("orcamento", motivo: "SendGridNaoConfigurado");
+                return;
+            }
+
+            var client = new SendGridClient(apiKey);
+            var from = new EmailAddress(fromEmail, fromName);
             var to = new EmailAddress(emailDestinatario, nomeDestinatario);
             var subject = "Orçamento da Ordem de Serviço";
             var plainTextContent = $"Olá, {nomeDestinatario}! O valor do orçamento da ordem de serviço ficou em {valorTotal.ToString("C2", new CultureInfo("pt-BR"))}.";
@@ -88,36 +107,24 @@ namespace AutoReparos.Infra.Services
 
             var msg = MailHelper.CreateSingleEmail(from, to, subject, plainTextContent, htmlContent);
 
-            try
-            {
-                var response = await client.SendEmailAsync(msg);
-                if (!response.IsSuccessStatusCode)
-                {
-                    _logger.LogWarning("Falha ao enviar e-mail de orçamento via SendGrid. StatusCode: {StatusCode}", response.StatusCode);
-                    AutoReparosMetrics.NotificacoesFalhas.Add(1,
-                        new KeyValuePair<string, object?>("canal", "email"),
-                        new KeyValuePair<string, object?>("tipo", "orcamento"),
-                        new KeyValuePair<string, object?>("status_code", (int)response.StatusCode));
-                }
-                else
-                {
-                    _logger.LogInformation("Email de orçamento enviado. StatusCode: {StatusCode}", response.StatusCode);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Erro de integração externa ao disparar e-mail de orçamento para {Email}", emailDestinatario);
-                AutoReparosMetrics.NotificacoesFalhas.Add(1,
-                    new KeyValuePair<string, object?>("canal", "email"),
-                    new KeyValuePair<string, object?>("tipo", "orcamento"),
-                    new KeyValuePair<string, object?>("motivo", ex.GetType().Name));
-            }
+            await EnviarComRetryAsync(client, msg, emailDestinatario, "orcamento");
         }
 
         public async Task EnviarAtualizacaoStatus(string emailDestinatario, string nomeDestinatario, Guid ordemServicoId, string statusAnterior, string novoStatus)
         {
-            var client = new SendGridClient(_configuration["SendGrid:ApiKey"]);
-            var from = new EmailAddress(_configuration["SendGrid:FromEmail"], _configuration["SendGrid:FromName"]);
+            var apiKey = _configuration["SendGrid:ApiKey"];
+            var fromEmail = _configuration["SendGrid:FromEmail"];
+            var fromName = _configuration["SendGrid:FromName"];
+
+            if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(fromEmail))
+            {
+                _logger.LogWarning("Configurações do SendGrid incompletas ou ausentes. Envio de atualização de status ignorado.");
+                RegistrarFalhaMetrica("atualizacao_status", motivo: "SendGridNaoConfigurado");
+                return;
+            }
+
+            var client = new SendGridClient(apiKey);
+            var from = new EmailAddress(fromEmail, fromName);
             var to = new EmailAddress(emailDestinatario, nomeDestinatario);
             var subject = $"Atualização de Status da Ordem de Serviço #{ordemServicoId.ToString().Substring(0, 8).ToUpper()}";
 
@@ -175,30 +182,170 @@ namespace AutoReparos.Infra.Services
 
             var msg = MailHelper.CreateSingleEmail(from, to, subject, plainTextContent, htmlContent);
 
-            try
+            await EnviarComRetryAsync(client, msg, emailDestinatario, "atualizacao_status");
+        }
+
+        /// <summary>
+        /// Executa o envio de e-mail via SendGrid com estratégia nativa de resiliência e retries.
+        /// 
+        /// AVISO ARQUITETURAL SOBRE IDEMPOTÊNCIA E RISCO DE DUPLICIDADE:
+        /// A API v3 Mail Send do SendGrid NÃO suporta chaves de idempotência enviadas pelo cliente.
+        /// Quando ocorre uma falha na camada de transporte de rede (TimeoutException, HttpRequestException),
+        /// é impossível para o cliente determinar com 100% de certeza se a conexão foi interrompida antes
+        /// ou depois de o servidor SendGrid ter aceito e enfileirado o disparo da mensagem.
+        /// 
+        /// Consequentemente, efetuar retry diante de quedas de rede acarreta um risco inerente de entrega
+        /// "at-least-once" (possível duplicidade de recebimento pelo destinatário).
+        /// Para mitigar esse impacto:
+        /// 1. Limitamos os retries a no máximo 2 tentativas adicionais (total de 3 tentativas).
+        /// 2. Respostas HTTP 4xx permanentes (400, 401, 403, 404) NÃO são retentadas.
+        /// 3. Respostas HTTP 429 (Too Many Requests) respeitam estritamente o cabeçalho 'Retry-After'.
+        ///    Neste cenário específico, o retry é 100% seguro contra duplicidade, pois o rate limiter do
+        ///    SendGrid rejeita o processamento da mensagem antes de enfileirá-la.
+        /// 4. Erros 5xx transitórios (502, 503, 504) e exceções de transporte utilizam backoff exponencial com jitter.
+        /// </summary>
+        private async Task EnviarComRetryAsync(
+            SendGridClient client,
+            SendGridMessage msg,
+            string emailDestinatario,
+            string tipoNotificacao)
+        {
+            const int maxTentativas = 3;
+            var delayBase = TimeSpan.FromSeconds(1);
+
+            for (var tentativa = 1; tentativa <= maxTentativas; tentativa++)
             {
-                var response = await client.SendEmailAsync(msg);
-                if (!response.IsSuccessStatusCode)
+                try
                 {
-                    _logger.LogWarning("Falha ao enviar e-mail de atualização de status via SendGrid. StatusCode: {StatusCode}", response.StatusCode);
-                    AutoReparosMetrics.NotificacoesFalhas.Add(1,
-                        new KeyValuePair<string, object?>("canal", "email"),
-                        new KeyValuePair<string, object?>("tipo", "atualizacao_status"),
-                        new KeyValuePair<string, object?>("status_code", (int)response.StatusCode));
+                    var response = await client.SendEmailAsync(msg);
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        _logger.LogInformation(
+                            "E-mail de {Tipo} enviado com sucesso para {Email} na tentativa {Tentativa}/{Max}. StatusCode: {StatusCode}",
+                            tipoNotificacao, emailDestinatario, tentativa, maxTentativas, response.StatusCode);
+                        return;
+                    }
+
+                    var statusCode = (int)response.StatusCode;
+
+                    // Erros 4xx de cliente (exceto 429 Too Many Requests): falha permanente (ex: chave inválida, payload malformado)
+                    if (statusCode >= 400 && statusCode < 500 && statusCode != (int)HttpStatusCode.TooManyRequests)
+                    {
+                        _logger.LogWarning(
+                            "Falha permanente ao enviar e-mail de {Tipo} para {Email}. StatusCode: {StatusCode}. Abortando retries.",
+                            tipoNotificacao, emailDestinatario, response.StatusCode);
+
+                        RegistrarFalhaMetrica(tipoNotificacao, statusCode: statusCode);
+                        return;
+                    }
+
+                    // Se atingiu a última tentativa permitida
+                    if (tentativa == maxTentativas)
+                    {
+                        _logger.LogError(
+                            "Limite de tentativas ({Max}) esgotado ao enviar e-mail de {Tipo} para {Email}. Último StatusCode: {StatusCode}",
+                            maxTentativas, tipoNotificacao, emailDestinatario, response.StatusCode);
+
+                        RegistrarFalhaMetrica(tipoNotificacao, statusCode: statusCode);
+                        return;
+                    }
+
+                    // Calcula tempo de espera para erro transitório (429 ou 5xx)
+                    var delay = CalcularDelay(response, tentativa, delayBase);
+
+                    _logger.LogWarning(
+                        "Falha transitória ao enviar e-mail de {Tipo} para {Email} (Tentativa {Tentativa}/{Max}). StatusCode: {StatusCode}. Aguardando {DelayMs}ms para retentar...",
+                        tipoNotificacao, emailDestinatario, tentativa, maxTentativas, response.StatusCode, (int)delay.TotalMilliseconds);
+
+                    await Task.Delay(delay);
                 }
-                else
+                catch (Exception ex) when (IsTransientException(ex) && tentativa < maxTentativas)
                 {
-                    _logger.LogInformation("Email de atualização de status enviado. StatusCode: {StatusCode}", response.StatusCode);
+                    var delay = CalcularDelayComJitter(tentativa, delayBase);
+
+                    _logger.LogWarning(
+                        ex,
+                        "Exceção transitória de rede ao disparar e-mail de {Tipo} para {Email} (Tentativa {Tentativa}/{Max}). Aguardando {DelayMs}ms para retentar. [Aviso de risco: Possível entrega duplicada caso o gateway SendGrid tenha recebido a requisição antes da interrupção de transporte]",
+                        tipoNotificacao, emailDestinatario, tentativa, maxTentativas, (int)delay.TotalMilliseconds);
+
+                    await Task.Delay(delay);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Erro não recuperável ao disparar e-mail de {Tipo} para {Email} na tentativa {Tentativa}/{Max}",
+                        tipoNotificacao, emailDestinatario, tentativa, maxTentativas);
+
+                    RegistrarFalhaMetrica(tipoNotificacao, motivo: ex.GetType().Name);
+                    return;
                 }
             }
-            catch (Exception ex)
+        }
+
+        private static TimeSpan CalcularDelay(Response response, int tentativa, TimeSpan delayBase)
+        {
+            // 1. Respeita o cabeçalho Retry-After em caso de HTTP 429
+            if (response.StatusCode == HttpStatusCode.TooManyRequests && response.Headers?.RetryAfter != null)
             {
-                _logger.LogError(ex, "Erro de integração externa ao disparar e-mail de atualização de status para {Email}", emailDestinatario);
-                AutoReparosMetrics.NotificacoesFalhas.Add(1,
-                    new KeyValuePair<string, object?>("canal", "email"),
-                    new KeyValuePair<string, object?>("tipo", "atualizacao_status"),
-                    new KeyValuePair<string, object?>("motivo", ex.GetType().Name));
+                if (response.Headers.RetryAfter.Delta.HasValue)
+                {
+                    var delta = response.Headers.RetryAfter.Delta.Value;
+                    return delta > TimeSpan.FromSeconds(10) ? TimeSpan.FromSeconds(10) : delta;
+                }
+
+                if (response.Headers.RetryAfter.Date.HasValue)
+                {
+                    var delta = response.Headers.RetryAfter.Date.Value - DateTimeOffset.UtcNow;
+                    if (delta > TimeSpan.Zero)
+                    {
+                        return delta > TimeSpan.FromSeconds(10) ? TimeSpan.FromSeconds(10) : delta;
+                    }
+                }
             }
+
+            // 2. Backoff exponencial com jitter para falhas 5xx e conexões
+            return CalcularDelayComJitter(tentativa, delayBase);
+        }
+
+        private static TimeSpan CalcularDelayComJitter(int tentativa, TimeSpan delayBase)
+        {
+            var fator = Math.Pow(2, tentativa - 1);
+            var baseMs = delayBase.TotalMilliseconds * fator;
+            var jitterMs = Random.Shared.Next(100, 400);
+
+            return TimeSpan.FromMilliseconds(baseMs + jitterMs);
+        }
+
+        private static bool IsTransientException(Exception ex)
+        {
+            return ex is HttpRequestException
+                || ex is TimeoutException
+                || ex is TaskCanceledException
+                || ex is IOException
+                || ex.InnerException is SocketException;
+        }
+
+        private static void RegistrarFalhaMetrica(string tipoNotificacao, int? statusCode = null, string? motivo = null)
+        {
+            var tags = new List<KeyValuePair<string, object?>>
+            {
+                new("canal", "email"),
+                new("tipo", tipoNotificacao)
+            };
+
+            if (statusCode.HasValue)
+            {
+                tags.Add(new("status_code", statusCode.Value));
+            }
+
+            if (!string.IsNullOrEmpty(motivo))
+            {
+                tags.Add(new("motivo", motivo));
+            }
+
+            AutoReparosMetrics.NotificacoesFalhas.Add(1, [.. tags]);
         }
 
         private static string TraduzirStatus(string status)
