@@ -23,12 +23,21 @@ namespace AutoReparos.Infra.Services
         private readonly ILogger<NotificacaoService> _logger;
         private readonly IConfiguration _configuration;
         private readonly IAppUrlProvider _appUrlProvider;
+        private readonly ISendGridClient? _sendGridClient;
+        private readonly Func<TimeSpan, Task> _delayFunc;
 
-        public NotificacaoService(ILogger<NotificacaoService> logger, IConfiguration configuration, IAppUrlProvider appUrlProvider)
+        public NotificacaoService(
+            ILogger<NotificacaoService> logger,
+            IConfiguration configuration,
+            IAppUrlProvider appUrlProvider,
+            ISendGridClient? sendGridClient = null,
+            Func<TimeSpan, Task>? delayFunc = null)
         {
             _logger = logger;
             _configuration = configuration;
             _appUrlProvider = appUrlProvider;
+            _sendGridClient = sendGridClient;
+            _delayFunc = delayFunc ?? (delay => Task.Delay(delay));
         }
 
         public async Task EnviarOrcamento(string emailDestinatario, string nomeDestinatario, string token, decimal valorTotal, IEnumerable<ServicoDto> servicos)
@@ -48,7 +57,7 @@ namespace AutoReparos.Infra.Services
                 return;
             }
 
-            var client = new SendGridClient(apiKey);
+            var client = _sendGridClient ?? new SendGridClient(apiKey);
             var from = new EmailAddress(fromEmail, fromName);
             var to = new EmailAddress(emailDestinatario, nomeDestinatario);
             var subject = "Orçamento da Ordem de Serviço";
@@ -123,7 +132,7 @@ namespace AutoReparos.Infra.Services
                 return;
             }
 
-            var client = new SendGridClient(apiKey);
+            var client = _sendGridClient ?? new SendGridClient(apiKey);
             var from = new EmailAddress(fromEmail, fromName);
             var to = new EmailAddress(emailDestinatario, nomeDestinatario);
             var subject = $"Atualização de Status da Ordem de Serviço #{ordemServicoId.ToString().Substring(0, 8).ToUpper()}";
@@ -204,8 +213,8 @@ namespace AutoReparos.Infra.Services
         ///    SendGrid rejeita o processamento da mensagem antes de enfileirá-la.
         /// 4. Erros 5xx transitórios (502, 503, 504) e exceções de transporte utilizam backoff exponencial com jitter.
         /// </summary>
-        private async Task EnviarComRetryAsync(
-            SendGridClient client,
+        public async Task EnviarComRetryAsync(
+            ISendGridClient client,
             SendGridMessage msg,
             string emailDestinatario,
             string tipoNotificacao)
@@ -258,7 +267,7 @@ namespace AutoReparos.Infra.Services
                         "Falha transitória ao enviar e-mail de {Tipo} para {Email} (Tentativa {Tentativa}/{Max}). StatusCode: {StatusCode}. Aguardando {DelayMs}ms para retentar...",
                         tipoNotificacao, emailDestinatario, tentativa, maxTentativas, response.StatusCode, (int)delay.TotalMilliseconds);
 
-                    await Task.Delay(delay);
+                    await _delayFunc(delay);
                 }
                 catch (Exception ex) when (IsTransientException(ex) && tentativa < maxTentativas)
                 {
@@ -269,7 +278,7 @@ namespace AutoReparos.Infra.Services
                         "Exceção transitória de rede ao disparar e-mail de {Tipo} para {Email} (Tentativa {Tentativa}/{Max}). Aguardando {DelayMs}ms para retentar. [Aviso de risco: Possível entrega duplicada caso o gateway SendGrid tenha recebido a requisição antes da interrupção de transporte]",
                         tipoNotificacao, emailDestinatario, tentativa, maxTentativas, (int)delay.TotalMilliseconds);
 
-                    await Task.Delay(delay);
+                    await _delayFunc(delay);
                 }
                 catch (Exception ex)
                 {
@@ -284,7 +293,7 @@ namespace AutoReparos.Infra.Services
             }
         }
 
-        private static TimeSpan CalcularDelay(Response response, int tentativa, TimeSpan delayBase)
+        public static TimeSpan CalcularDelay(Response response, int tentativa, TimeSpan delayBase)
         {
             // 1. Respeita o cabeçalho Retry-After em caso de HTTP 429
             if (response.StatusCode == HttpStatusCode.TooManyRequests && response.Headers?.RetryAfter != null)
@@ -309,7 +318,7 @@ namespace AutoReparos.Infra.Services
             return CalcularDelayComJitter(tentativa, delayBase);
         }
 
-        private static TimeSpan CalcularDelayComJitter(int tentativa, TimeSpan delayBase)
+        public static TimeSpan CalcularDelayComJitter(int tentativa, TimeSpan delayBase)
         {
             var fator = Math.Pow(2, tentativa - 1);
             var baseMs = delayBase.TotalMilliseconds * fator;
@@ -318,7 +327,7 @@ namespace AutoReparos.Infra.Services
             return TimeSpan.FromMilliseconds(baseMs + jitterMs);
         }
 
-        private static bool IsTransientException(Exception ex)
+        public static bool IsTransientException(Exception ex)
         {
             return ex is HttpRequestException
                 || ex is TimeoutException

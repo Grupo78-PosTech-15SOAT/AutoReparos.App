@@ -2,6 +2,7 @@ using AutoReparos.API.Controllers;
 using AutoReparos.Application.Shared;
 using AutoReparos.Application.Usuarios.DTOs.Request;
 using AutoReparos.Application.Usuarios.DTOs.Response;
+using AutoReparos.Domain.Usuarios.Enums;
 
 namespace AutoReparos.API.Endpoints
 {
@@ -11,7 +12,7 @@ namespace AutoReparos.API.Endpoints
         {
             var group = app.MapGroup("/api/usuarios")
                 .WithTags("Usuários")
-                .RequireAuthorization("OperadorOficina");
+                .RequireAuthorization(policy => policy.RequireRole(nameof(ETipoUsuario.Administrador)));
 
             group.MapPost("/", (UsuarioCreateDto dto, UsuarioController controller) => controller.Create(dto))
             .WithName("CreateUsuario")
