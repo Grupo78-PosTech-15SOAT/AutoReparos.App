@@ -4,6 +4,7 @@ using AutoReparos.API.Middlewares;
 using AutoReparos.Application;
 using AutoReparos.Infra.Data;
 using AutoReparos.Infra.IoC;
+using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -38,7 +39,17 @@ builder.Services.AddOpenTelemetryObservability(builder.Configuration, builder.Lo
 
 var app = builder.Build();
 
-await DbInitializer.SeedDataAsync(app.Services);
+if (app.Configuration.GetValue<bool>("Database:RunMigrations"))
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.MigrateAsync();
+    return;
+}
+
+await DbInitializer.SeedDataAsync(
+    app.Services,
+    skipMigration: app.Configuration.GetValue<bool>("Database:SkipStartupMigration"));
 
 app.UseSwagger();
 app.UseSwaggerUI(options =>
