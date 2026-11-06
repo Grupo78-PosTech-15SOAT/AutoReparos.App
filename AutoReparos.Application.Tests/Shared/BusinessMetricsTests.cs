@@ -6,6 +6,7 @@ using Xunit;
 
 namespace AutoReparos.Application.Tests.Shared
 {
+    [Collection("BusinessMetrics")]
     public class BusinessMetricsTests
     {
         [Fact]

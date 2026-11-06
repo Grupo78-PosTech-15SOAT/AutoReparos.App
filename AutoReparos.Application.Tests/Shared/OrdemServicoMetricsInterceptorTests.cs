@@ -9,14 +9,6 @@ using System.Diagnostics.Metrics;
 
 namespace AutoReparos.Application.Tests.Shared;
 
-/// <summary>
-/// Os testes deste arquivo escutam o Meter estático <see cref="AutoReparosMetrics.Meter"/>.
-/// Como o Meter é global ao processo, as medições de um teste vazariam para outro se
-/// rodassem em paralelo — daí a coleção dedicada sem paralelismo.
-/// </summary>
-[CollectionDefinition("BusinessMetrics", DisableParallelization = true)]
-public class BusinessMetricsCollection;
-
 [Collection("BusinessMetrics")]
 public class OrdemServicoMetricsInterceptorTests
 {

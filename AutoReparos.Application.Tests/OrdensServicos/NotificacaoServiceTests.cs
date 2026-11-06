@@ -24,6 +24,7 @@ using Xunit;
 
 namespace AutoReparos.Application.Tests.OrdensServicos
 {
+    [Collection("BusinessMetrics")]
     public class NotificacaoServiceTests
     {
         private readonly ILogger<NotificacaoService> _logger = new NullLogger<NotificacaoService>();
