@@ -5,8 +5,10 @@ using AutoReparos.Domain.Usuarios.Enums;
 using AutoReparos.IntegrationTests.Infrastructure;
 using Bogus;
 using FluentAssertions;
+using System;
 using System.Net;
 using System.Net.Http.Json;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace AutoReparos.IntegrationTests.Features.Usuarios;
@@ -132,5 +134,27 @@ public class UsuarioIntegrationTests(CustomWebApplicationFactory<Program> factor
         var response = await Client.PostAsJsonAsync("/api/usuarios", createDto);
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact(DisplayName = "POST /api/usuarios - Atendente deve receber 403 Forbidden")]
+    public async Task CreateUsuario_ComRoleAtendente_DeveRetornarForbidden()
+    {
+        AuthenticateAsRole(ETipoUsuario.Atendente);
+        var faker = new Faker("pt_BR");
+        var requestDto = new UsuarioCreateDto(faker.Person.FullName, faker.Internet.Email(), "Senha@123", ETipoUsuario.Mecanico);
+
+        var response = await Client.PostAsJsonAsync("/api/usuarios", requestDto);
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact(DisplayName = "POST /api/usuarios - Mecanico deve receber 403 Forbidden")]
+    public async Task CreateUsuario_ComRoleMecanico_DeveRetornarForbidden()
+    {
+        AuthenticateAsRole(ETipoUsuario.Mecanico);
+        var faker = new Faker("pt_BR");
+        var requestDto = new UsuarioCreateDto(faker.Person.FullName, faker.Internet.Email(), "Senha@123", ETipoUsuario.Mecanico);
+
+        var response = await Client.PostAsJsonAsync("/api/usuarios", requestDto);
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 }

@@ -5,7 +5,11 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
 using Respawn;
+using System;
+using System.Collections.Generic;
 using System.Data.Common;
+using System.IO;
+using System.Threading.Tasks;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -13,7 +17,6 @@ namespace AutoReparos.IntegrationTests.Infrastructure
 {
     public class CustomWebApplicationFactory<TProgram> : WebApplicationFactory<TProgram>, IAsyncLifetime where TProgram : class
     {
-        private const string ConnectionStringsDbConnection = "ConnectionStrings__DbConnection";
         private static readonly DbContainerSettings Settings = new();
 
         static CustomWebApplicationFactory()
@@ -56,6 +59,10 @@ namespace AutoReparos.IntegrationTests.Infrastructure
             {
                 var testConfigPath = Path.Combine(AppContext.BaseDirectory, "appsettings.Testing.json");
                 configBuilder.AddJsonFile(testConfigPath, optional: true);
+                configBuilder.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ConnectionStrings:DbConnection"] = ConnectionString
+                });
             });
         }
 
@@ -84,12 +91,10 @@ namespace AutoReparos.IntegrationTests.Infrastructure
         public async Task InitializeAsync()
         {
             await _dbContainer.StartAsync();
-            Environment.SetEnvironmentVariable(ConnectionStringsDbConnection, ConnectionString);
         }
 
         async Task IAsyncLifetime.DisposeAsync()
         {
-            Environment.SetEnvironmentVariable(ConnectionStringsDbConnection, null);
             if (_dbConnection != null)
             {
                 await _dbConnection.DisposeAsync();

@@ -135,3 +135,7 @@ O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) executa a vali
 ## 7. Integração com o Repositório Pai
 
 Este repositório é registrado como **git submodule** no [repositório pai AutoReparos](https://github.com/Grupo78-PosTech-15SOAT/AutoReparos) no caminho `submodules/AutoReparos.App/`.
+
+### Migrations de produção
+
+O startup da API continua fazendo migrations por padrão em desenvolvimento. Em produção, `Database__SkipStartupMigration=true` impede que cada réplica execute migrations concorrentes. O workflow do repositório pai cria a migration Job com `Database__RunMigrations=true`, aguarda conclusão e só então instala/atualiza a release Helm. A connection string chega pelo secret Kubernetes criado em runtime a partir do Secrets Manager; ela não deve ser gravada em `values.yaml` nem em artifacts.

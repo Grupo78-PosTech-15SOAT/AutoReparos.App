@@ -40,7 +40,8 @@ namespace AutoReparos.API
                     policy.SetIsOriginAllowed(_ => true)
                           .AllowAnyHeader()
                           .AllowAnyMethod()
-                          .AllowCredentials();
+                          .AllowCredentials()
+                          .WithExposedHeaders("X-Correlation-Id");
                 });
             });
 
